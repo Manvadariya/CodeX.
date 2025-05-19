@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: codex
+    runtime: python
+    buildCommand: ./build.sh
+    startCommand: gunicorn --chdir CodeX CodeX.wsgi:application
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: false
+      - key: ALLOWED_HOSTS
+        value: '.onrender.com'
+      - key: DATABASE_URL
+        value: sqlite:///db.sqlite3
+      # Google OAuth credentials must be added manually in the Render dashboard
+      # These are just placeholders
+      - key: GOOGLE_CLIENT_ID
+        sync: false  # This means you'll need to add it manually in Render
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false  # This means you'll need to add it manually in Render

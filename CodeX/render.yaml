@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: codex
+    runtime: python
+    buildCommand: ./build.sh
+    startCommand: gunicorn CodeX.wsgi:application
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: false
+      - key: ALLOWED_HOSTS
+        value: '.onrender.com'
+      - key: DATABASE_URL
+        value: sqlite:///db.sqlite3
