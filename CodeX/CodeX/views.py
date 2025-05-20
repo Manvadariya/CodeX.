@@ -13,11 +13,34 @@ def home_page(request):
     """
     View function for the home page of the site.
     """
-    # You can add context data to pass to the template here
-    context = {}
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # Render the HTML template home.html with the data in the context
-    return render(request, 'home.html', context)
+    try:
+        # Add basic context data
+        context = {
+            'debug': True,
+            'version': '1.0.0',
+        }
+        
+        # Log successful rendering attempt
+        logger.info("Attempting to render home.html template")
+        
+        # Render the HTML template home.html with the data in the context
+        return render(request, 'home.html', context)
+    except Exception as e:
+        # Log the exception for debugging
+        logger.error(f"Error rendering home page: {str(e)}")
+        
+        # Provide a simple fallback response to troubleshoot
+        from django.http import HttpResponse
+        return HttpResponse(
+            f"<html><body><h1>CodeX is running!</h1>" +
+            f"<p>We're experiencing some technical difficulties with the full site.</p>" +
+            f"<p>Error: {str(e) if settings.DEBUG else 'Please check logs for details.'}</p>" +
+            "</body></html>", 
+            content_type='text/html'
+        )
 
 @csrf_exempt
 def execute_code(request):
