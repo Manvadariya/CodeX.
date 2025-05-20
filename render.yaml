@@ -4,6 +4,8 @@ services:
     runtime: python
     buildCommand: ./build.sh
     startCommand: gunicorn --chdir CodeX CodeX.wsgi:application
+    staticPublishPath: ./CodeX/staticfiles
+    staticUrlPrefix: /static
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0

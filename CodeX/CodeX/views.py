@@ -8,6 +8,10 @@ from django.views.decorators.csrf import csrf_exempt
 from core.models import CodeExecution, CodeSnippet
 from django.contrib.auth.models import User
 from django.utils import timezone
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 def home_page(request):
     """
@@ -21,7 +25,7 @@ def home_page(request):
 
 @csrf_exempt
 def execute_code(request):
-    """Execute code using Docker and return the output"""
+    """Execute code or provide a message in environments where execution is disabled"""
     if request.method == 'POST':
         try:
             # Get code data from request
@@ -30,6 +34,20 @@ def execute_code(request):
             language = data.get('language', 'cpp')
             user_input = data.get('input', '')
             snippet_id = data.get('snippet_id')
+            
+            # Check if we're running on Render or another cloud environment
+            # where Docker might not be available
+            is_cloud_environment = os.environ.get('RENDER', False) or 'DYNO' in os.environ
+            
+            if is_cloud_environment:
+                # We're on Render or Heroku - return a graceful message instead of trying to use Docker
+                return JsonResponse({
+                    'status': 'success',
+                    'output': 'Code execution is disabled in the cloud environment. This feature is only available in the development environment.',
+                    'stderr': ''
+                })
+            
+            # The rest of this function will only run in environments where Docker is available
             
             # Get code snippet if ID is provided
             code_snippet = None
@@ -72,91 +90,105 @@ def execute_code(request):
             with open(input_file, 'w') as f:
                 f.write(user_input)
             
-            # Build Docker image if not already built
-            image_name = 'code_execution_env'
-            docker_build_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            
-            # Check if image exists
-            check_image = subprocess.run(
-                ['docker', 'images', '-q', image_name],
-                capture_output=True, 
-                text=True
-            )
-            
-            if not check_image.stdout.strip():
-                # Build the image
-                subprocess.run(
-                    ['docker', 'build', '-t', image_name, docker_build_path],
-                    check=True
-                )
-            
-            # Run code in Docker container with proper volume mounting
-            docker_cmd = [
-                'docker', 'run',
-                '--rm',  # Remove container after execution
-                '--memory=512m',  # Limit memory usage
-                '--cpus=0.5',     # Limit CPU usage
-                '--network=none', # Disable network access
-                '--ulimit=nproc=50:100', # Limit number of processes
-                '-v', f"{temp_dir}:/app/workspace",
-                '--workdir', '/app/workspace',
-                image_name,
-                f'{file_name}.{file_extension}',
-                'input.txt'
-            ]
-            
+            # Try to use Docker if available
             try:
-                result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=15)
-            except subprocess.TimeoutExpired:
+                # Build Docker image if not already built
+                image_name = 'code_execution_env'
+                docker_build_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                
+                # Check if image exists
+                check_image = subprocess.run(
+                    ['docker', 'images', '-q', image_name],
+                    capture_output=True, 
+                    text=True
+                )
+                
+                if not check_image.stdout.strip():
+                    # Build the image
+                    subprocess.run(
+                        ['docker', 'build', '-t', image_name, docker_build_path],
+                        check=True
+                    )
+                
+                # Run code in Docker container with proper volume mounting
+                docker_cmd = [
+                    'docker', 'run',
+                    '--rm',  # Remove container after execution
+                    '--memory=512m',  # Limit memory usage
+                    '--cpus=0.5',     # Limit CPU usage
+                    '--network=none', # Disable network access
+                    '--ulimit=nproc=50:100', # Limit number of processes
+                    '-v', f"{temp_dir}:/app/workspace",
+                    '--workdir', '/app/workspace',
+                    image_name,
+                    f'{file_name}.{file_extension}',
+                    'input.txt'
+                ]
+                
+                try:
+                    result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=15)
+                except subprocess.TimeoutExpired:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Execution timed out - your code took too long to run'
+                    })
+                
+                # Read output
+                output = "No output generated"
+                try:
+                    with open(os.path.join(temp_dir, 'output.txt'), 'r') as f:
+                        output = f.read()
+                except FileNotFoundError:
+                    output = result.stdout if result.stdout else result.stderr
+                
+                # Create CodeExecution record
+                execution_status = 'SUCCESS' if result.returncode == 0 else 'ERROR'
+                
+                # Save the code execution record if appropriate
+                if code_snippet:
+                    CodeExecution.objects.create(
+                        code=code_snippet,
+                        code_snapshot=code,
+                        execution_result=output,
+                        execution_status=execution_status
+                    )
+                elif request.user.is_authenticated:
+                    # Create a temporary snippet if user is logged in but no snippet was specified
+                    new_snippet = CodeSnippet.objects.create(
+                        title=f"Temporary Execution - {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        language=language,
+                        owner=request.user,
+                        code_content=code
+                    )
+                    CodeExecution.objects.create(
+                        code=new_snippet,
+                        code_snapshot=code,
+                        execution_result=output,
+                        execution_status=execution_status
+                    )
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'output': output,
+                    'stderr': result.stderr if hasattr(result, 'stderr') else ''
+                })
+                
+            except (FileNotFoundError, subprocess.SubprocessError) as e:
+                # Docker is not available or command failed
                 return JsonResponse({
                     'status': 'error',
-                    'message': 'Execution timed out - your code took too long to run'
+                    'message': f'Docker is not available or command failed: {str(e)}'
                 })
-            
-            # Read output
-            output = "No output generated"
-            try:
-                with open(os.path.join(temp_dir, 'output.txt'), 'r') as f:
-                    output = f.read()
-            except FileNotFoundError:
-                output = result.stdout if result.stdout else result.stderr
-            
-            # Create CodeExecution record
-            execution_status = 'SUCCESS' if result.returncode == 0 else 'ERROR'
-            
-            # Always save the code execution, even for anonymous users
-            if not code_snippet and request.user.is_authenticated:
-                # Create a temporary snippet if user is logged in but no snippet was specified
-                code_snippet = CodeSnippet.objects.create(
-                    title=f"Temporary Execution - {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    language=language,
-                    owner=request.user,
-                    code_content=code
-                )
-            
-            if code_snippet:
-                CodeExecution.objects.create(
-                    code=code_snippet,
-                    code_snapshot=code,
-                    execution_result=output,
-                    execution_status=execution_status
-                )
-            
-            # Clean up temporary files
-            try:
-                os.remove(code_file)
-                os.remove(input_file)
-                if os.path.exists(output_file):
-                    os.remove(output_file)
-                os.rmdir(temp_dir)
-            except Exception as e:
-                print(f"Cleanup error: {e}")
-            
-            return JsonResponse({
-                'status': 'success',
-                'output': output,
-                'stderr': result.stderr
-            })
+            finally:
+                # Clean up temporary files
+                try:
+                    os.remove(code_file)
+                    os.remove(input_file)
+                    if os.path.exists(output_file):
+                        os.remove(output_file)
+                    os.rmdir(temp_dir)
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
             
         except Exception as e:
             return JsonResponse({

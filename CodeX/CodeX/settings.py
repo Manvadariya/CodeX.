@@ -167,13 +167,16 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static')
 ]
 
 # For production
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Make sure the staticfiles directory exists
+os.makedirs(STATIC_ROOT, exist_ok=True)
 
 # Enable WhiteNoise's GZip compression
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
