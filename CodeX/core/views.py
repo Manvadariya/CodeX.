@@ -4,22 +4,21 @@ from django.contrib import messages
 from django.contrib.auth import login, authenticate, logout
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+from django.conf import settings
 import json
 from .models import CodeSnippet, AIAssistance
 import uuid
-from openai import OpenAI
+import os
+import logging
 from django.utils import timezone
 import re
 
-# Default API credentials
-API_KEY = "paste_your_api_key_here"  # Replace with your actual API key
-BASE_URL = "https://models.inference.ai.azure.com"
+# Set up logging
+logger = logging.getLogger(__name__)
 
-# Default client instance
-default_client = OpenAI(
-    api_key=API_KEY,
-    base_url=BASE_URL
-)
+# Initialize variables but don't create clients at import time
+API_KEY = os.environ.get('OPENAI_API_KEY', None)
+BASE_URL = os.environ.get('OPENAI_BASE_URL', "https://api.openai.com/v1")
 
 # Global variable to store the most recently used API key
 current_api_key = API_KEY
@@ -34,32 +33,42 @@ def get_openai_client(api_key=None):
                                  If None, uses the most recently stored key.
     
     Returns:
-        OpenAI: Configured OpenAI client
+        OpenAI: Configured OpenAI client or None if no valid API key is available
     """
     global current_api_key
     
-    # If an API key is provided, store it for future use
-    if api_key:
-        # Store the API key for future calls
-        current_api_key = api_key
-        print(f"Using custom API key: {api_key[:5]}...{api_key[-5:] if len(api_key) > 10 else ''}")
+    try:
+        # Import OpenAI here to avoid import errors at module level
+        from openai import OpenAI
         
-        # Check if it's a GitHub token
-        if api_key.startswith('ghp_'):
-            print("Detected GitHub token format")
+        # If an API key is provided, store it for future use
+        if api_key:
+            # Store the API key for future calls
+            current_api_key = api_key
+            logger.debug(f"Using custom API key: {api_key[:5]}...{api_key[-5:] if len(api_key) > 10 else ''}")
+            
+            # Create a new client with the provided API key
+            return OpenAI(
+                api_key=api_key,
+                base_url=BASE_URL
+            )
         
-        # Create a new client with the provided API key
-        return OpenAI(
-            api_key=api_key,
-            base_url=BASE_URL
-        )
-    
-    # If no API key is provided, use the most recently stored one
-    print("Using previously stored API key")
-    return OpenAI(
-        api_key=current_api_key,
-        base_url=BASE_URL
-    )
+        # If no API key is provided, use the most recently stored one
+        if current_api_key:
+            logger.debug("Using previously stored API key")
+            return OpenAI(
+                api_key=current_api_key,
+                base_url=BASE_URL
+            )
+        else:
+            logger.warning("No API key available for OpenAI client")
+            return None
+    except ImportError:
+        logger.error("Failed to import OpenAI library")
+        return None
+    except Exception as e:
+        logger.error(f"Error creating OpenAI client: {str(e)}")
+        return None
 
 def chat_with_gpt(prompt, chat_history, api_key=None):
     """
@@ -73,6 +82,9 @@ def chat_with_gpt(prompt, chat_history, api_key=None):
     Returns:
         str: The model's response
     """
+    # Default response in case API is not available
+    default_response = "I'm currently unable to process your request as the AI service is not available in this environment. Please try again later or contact support."
+    
     messages = [
         {
             "role": "system",
@@ -90,27 +102,41 @@ def chat_with_gpt(prompt, chat_history, api_key=None):
     ]
     
     try:
+        # Check if we're running on Render or another cloud environment
+        # where OpenAI API calls might fail or not be configured
+        is_cloud_environment = os.environ.get('RENDER', False) or 'DYNO' in os.environ
+        
+        if is_cloud_environment and not api_key and not current_api_key:
+            logger.warning("Running in cloud environment without API key, returning default response")
+            return default_response
+            
         # Get a client with the appropriate API key
         client = get_openai_client(api_key)
         
+        if not client:
+            logger.error("Failed to get OpenAI client, returning default response")
+            return default_response
+        
         # Determine model based on API key type
-        model = "gpt-4.1"  # Default model
+        model = "gpt-3.5-turbo"  # Default to a more widely available model
         
         completion = client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=1.0,
-            top_p=1.0,
-            max_tokens=1000,
+            temperature=0.7,
+            max_tokens=800,
             stream=False,
         )
         return completion.choices[0].message.content
     except Exception as e:
         error_message = str(e)
-        print(f"API Error: {error_message}")
+        logger.error(f"API Error: {error_message}")
         
         if "401" in error_message or "unauthorized" in error_message.lower() or "authentication" in error_message.lower():
             return "Error: Authentication failed. Your API key appears to be invalid or expired."
+        
+        # Return a generic error message for any other exception
+        return default_response
         elif "rate limit" in error_message.lower() or "429" in error_message:
             return "Error: Rate limit exceeded. Please try again later."
         else:
@@ -206,81 +232,95 @@ def shared_code(request, pk):
 @login_required
 def chat_api(request):
     if request.method == 'POST':
-        data = json.loads(request.body)
-        prompt = data.get('prompt')
-        chat_history = data.get('chat_history', [])
-        code_id = data.get('code_id')
-        
-        # Get API key from request headers if available
-        api_key = None
-        if 'X-OpenAI-API-Key' in request.headers:
-            api_key = request.headers.get('X-OpenAI-API-Key')
-        elif 'X-Github-Api-Key' in request.headers:
-            api_key = request.headers.get('X-Github-Api-Key')
-        
-        if not prompt:
-            return JsonResponse({'error': 'Prompt is required'}, status=400)
-        
-        # Get code snippet if ID is provided
-        code_snippet = None
-        if code_id:
-            try:
-                code_snippet = CodeSnippet.objects.get(id=code_id)
-            except CodeSnippet.DoesNotExist:
-                pass
-        
-        # Extract actual code content from the prompt for storage
-        code_content = ""
         try:
-            # Try to extract code from the prompt which typically follows a pattern like:
-            # I'm working with the following code:
-            # ```python
-            # def hello():
-            #     print("hello world")
-            # ```
-            code_match = re.search(r'```(?:\w+)?\n(.*?)\n```', prompt, re.DOTALL)
-            if code_match:
-                code_content = code_match.group(1)
-        except Exception:
-            # If extraction fails, don't prevent the API from functioning
-            pass
-        
-        # If no code snippet exists but user is querying about code, create a temporary one
-        if not code_snippet and code_content and request.user.is_authenticated:
-            # Try to determine language from the prompt
-            language = 'python'  # Default
-            language_match = re.search(r'```(\w+)', prompt)
-            if language_match:
-                detected_lang = language_match.group(1).lower()
-                if detected_lang in ['python', 'py']:
-                    language = 'python'
-                elif detected_lang in ['javascript', 'js']:
-                    language = 'javascript'
-                elif detected_lang in ['cpp', 'c++']:
-                    language = 'cpp'
-                elif detected_lang in ['java']:
-                    language = 'java'
+            data = json.loads(request.body)
+            prompt = data.get('prompt')
+            chat_history = data.get('chat_history', [])
+            code_id = data.get('code_id')
             
-            code_snippet = CodeSnippet.objects.create(
-                title=f"AI Chat Snippet - {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                language=language,
-                owner=request.user,
-                code_content=code_content
-            )
-        
-        # Pass the API key from the headers to the chat_with_gpt function
-        response = chat_with_gpt(prompt, chat_history, api_key)
-        
-        # Create AIAssistance record
-        AIAssistance.objects.create(
-            user=request.user,
-            code=code_snippet,
-            prompt=prompt,
-            response=response
-        )
-        
-        return JsonResponse({
-            'response': response
-        })
+            # Get API key from request headers if available
+            api_key = None
+            if 'X-OpenAI-API-Key' in request.headers:
+                api_key = request.headers.get('X-OpenAI-API-Key')
+            elif 'X-Github-Api-Key' in request.headers:
+                api_key = request.headers.get('X-Github-Api-Key')
+            
+            if not prompt:
+                return JsonResponse({'error': 'Prompt is required'}, status=400)
+            
+            # Get code snippet if ID is provided
+            code_snippet = None
+            if code_id:
+                try:
+                    code_snippet = CodeSnippet.objects.get(id=code_id)
+                except CodeSnippet.DoesNotExist:
+                    logger.warning(f"CodeSnippet with ID {code_id} not found")
+            
+            # Extract actual code content from the prompt for storage
+            code_content = ""
+            try:
+                # Try to extract code from the prompt which typically follows a pattern like:
+                # I'm working with the following code:
+                # ```python
+                # def hello():
+                #     print("hello world")
+                # ```
+                code_match = re.search(r'```(?:\w+)?\n(.*?)\n```', prompt, re.DOTALL)
+                if code_match:
+                    code_content = code_match.group(1)
+            except Exception as e:
+                # If extraction fails, don't prevent the API from functioning
+                logger.warning(f"Failed to extract code content: {str(e)}")
+            
+            # If no code snippet exists but user is querying about code, create a temporary one
+            if not code_snippet and code_content and request.user.is_authenticated:
+                # Try to determine language from the prompt
+                language = 'python'  # Default
+                language_match = re.search(r'```(\w+)', prompt)
+                if language_match:
+                    detected_lang = language_match.group(1).lower()
+                    if detected_lang in ['python', 'py']:
+                        language = 'python'
+                    elif detected_lang in ['javascript', 'js']:
+                        language = 'javascript'
+                    elif detected_lang in ['cpp', 'c++']:
+                        language = 'cpp'
+                    elif detected_lang in ['java']:
+                        language = 'java'
+                
+                try:
+                    code_snippet = CodeSnippet.objects.create(
+                        title=f"AI Chat Snippet - {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        language=language,
+                        owner=request.user,
+                        code_content=code_content
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to create CodeSnippet: {str(e)}")
+            
+            # Pass the API key from the headers to the chat_with_gpt function
+            response = chat_with_gpt(prompt, chat_history, api_key)
+            
+            # Create AIAssistance record if possible
+            try:
+                if request.user.is_authenticated:
+                    AIAssistance.objects.create(
+                        user=request.user,
+                        code=code_snippet,  # This can be None
+                        prompt=prompt,
+                        response=response
+                    )
+            except Exception as e:
+                logger.error(f"Failed to create AIAssistance record: {str(e)}")
+            
+            return JsonResponse({
+                'response': response
+            })
+        except Exception as e:
+            logger.error(f"Error in chat_api: {str(e)}")
+            return JsonResponse({
+                'error': 'An error occurred while processing your request',
+                'details': str(e) if settings.DEBUG else ''
+            }, status=500)
     
     return JsonResponse({'error': 'Only POST method is allowed'}, status=405)
