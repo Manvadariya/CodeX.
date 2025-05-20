@@ -1,23 +1,33 @@
+# File: D:/CodeX/render.yaml
 services:
   - type: web
     name: codex
     runtime: python
-    buildCommand: ./build.sh
-    startCommand: gunicorn --chdir CodeX CodeX.wsgi:application
+    plan: free # Or your desired plan, free tier does not support Docker execution    buildCommand: ./build.sh
+    startCommand: cd CodeX && PYTHONPATH=$PYTHONPATH:. gunicorn CodeX.wsgi:application
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
       - key: SECRET_KEY
         generateValue: true
+      - key: WEB_CONCURRENCY # Recommended for Gunicorn
+        value: 4
       - key: DEBUG
         value: false
-      - key: ALLOWED_HOSTS
-        value: '.onrender.com'
+      - key: ALLOWED_HOSTS # Render adds its own domain, but explicit is good
+        value: .onrender.com 
       - key: DATABASE_URL
-        value: sqlite:///db.sqlite3
-      # Google OAuth credentials must be added manually in the Render dashboard
-      # These are just placeholders
+        fromDatabase: # If using a Render managed database
+          name: your-database-name # Replace with your Render DB name
+          property: connectionString
+      # If using SQLite (ephemeral on free tier without a disk):
+      - key: DATABASE_URL
+        value: sqlite:///db.sqlite3 
+      # Make sure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set in Render's UI
       - key: GOOGLE_CLIENT_ID
-        sync: false  # This means you'll need to add it manually in Render
+        sync: false
       - key: GOOGLE_CLIENT_SECRET
-        sync: false  # This means you'll need to add it manually in Render
+        sync: false
+      # Add any other necessary environment variables, e.g., for OpenAI
+      - key: OPENAI_API_KEY # Example if your chat uses a server-side key
+        sync: false
