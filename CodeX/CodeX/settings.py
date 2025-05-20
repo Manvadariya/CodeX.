@@ -39,15 +39,14 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    # Our custom error handling middleware should be first to catch all exceptions
-    'CodeX.middleware.ErrorHandlingMiddleware',
+    # If you remove the custom middleware, the first one would now be SecurityMiddleware
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'allauth.account.middleware.AccountMiddleware', # Django Allauth middleware
+    'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
