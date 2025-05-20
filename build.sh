@@ -3,22 +3,15 @@
 # exit on error
 set -o errexit
 
-echo "Starting build process..."
-
-echo "Installing Python dependencies..."
-pip install -r requirements.txt
-
-echo "Navigating to Django project directory..."
 cd CodeX
+pip install -r ../requirements.txt
 
-echo "Creating staticfiles directory if it doesn't exist..."
-mkdir -p staticfiles
-
-echo "Running Django collectstatic..."
-python manage.py collectstatic --noinput --clear
-
-echo "Running Django migrations..."
+python manage.py collectstatic --no-input
 python manage.py migrate
+
+# Print debug information
+echo "Static files directory content:"
+ls -la staticfiles/
 
 echo "Checking staticfiles directory content..."
 ls -la staticfiles/

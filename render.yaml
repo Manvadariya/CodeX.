@@ -14,16 +14,12 @@ services:
         value: 4
       - key: DEBUG
         value: false
-      - key: ALLOWED_HOSTS # Render adds its own domain, but explicit is good
-        value: .onrender.com 
+      - key: ALLOWED_HOSTS
+        value: '.onrender.com'
       - key: DATABASE_URL
-        fromDatabase: # If using a Render managed database
-          name: your-database-name # Replace with your Render DB name
-          property: connectionString
-      # If using SQLite (ephemeral on free tier without a disk):
-      - key: DATABASE_URL
-        value: sqlite:///db.sqlite3 
-      # Make sure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set in Render's UI
+        value: sqlite:///db.sqlite3
+      # Google OAuth credentials must be added manually in the Render dashboard
+      # These are just placeholders
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
