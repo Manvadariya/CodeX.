@@ -8,12 +8,13 @@ from django.views.decorators.csrf import csrf_exempt
 from core.models import CodeExecution, CodeSnippet
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.conf import settings
+import logging
 
 def home_page(request):
     """
     View function for the home page of the site.
     """
-    import logging
     logger = logging.getLogger(__name__)
     
     try:
